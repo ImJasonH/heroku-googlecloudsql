@@ -98,7 +98,6 @@ func provision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error creating instance", http.StatusInternalServerError)
 		return
 	}
-	c.Infof("resp: %+v", apiResp)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(herokuResponse{
@@ -121,7 +120,8 @@ func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, er
 		c.Errorf("accesstoken: %v", err)
 		return nil, err
 	}
-	apiReq.Header.Add("Authorization", "Bearer "+tok)
+	apiReq.Header.Set("Authorization", "Bearer "+tok)
+	apiReq.Header.Set("Content-Type", "application/json")
 	buf := bytes.NewBuffer(make([]byte, 0, bufSize))
 	json.NewEncoder(buf).Encode(apiRequest{
 		Instance: instanceName,
@@ -132,7 +132,7 @@ func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, er
 			AuthorizedGAEApplications: []string{appengine.AppID(c)},
 			PricingPlan:               "PER_USE",
 			ReplicationType:           "ASYNCHRONOUS",
-			IPConfiguration: apiRequestIPConfig {
+			IPConfiguration: apiRequestIPConfig{
 				Enabled: true,
 			},
 		},
@@ -143,8 +143,8 @@ func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, er
 		return nil, instanceExists
 	} else if apiHttpResp.StatusCode != http.StatusOK {
 		slurp, _ := ioutil.ReadAll(apiHttpResp.Body)
-		c.Errorf("ERROR: %d, %s", apiHttpResp.StatusCode, slurp)
-		return nil, errors.New("bad status")
+		c.Errorf("API request failed:\n %d, %s", apiHttpResp.StatusCode, slurp)
+		return nil, errors.New("insert failed")
 	}
 	if err != nil {
 		c.Errorf("insert: %v", err)
