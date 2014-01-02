@@ -1,7 +1,7 @@
 {
   "id": "googlecloudsql",
   "api": {
-    "config_vars": [ "MYSQL_URL" ],
+    "config_vars": [ "GOOGLECLOUDSQL_URL" ],
     "regions": [ "us" ],
     "password": "f1937226ef79503baddc427190207e5d",
     "sso_salt": "4f8954d728b09b5d9e7f5ec327c539ed",
@@ -10,8 +10,8 @@
       "sso_url": "https://herokusql.appspot.com/sso/login"
     },
     "test": {
-      "base_url": "http://localhost:8080/heroku/resources",
-      "sso_url": "http://localhost:8080/sso/login"
+      "base_url": "https://test.herokusql.appspot.com/heroku/resources",
+      "sso_url": "https://test.herokusql.appspot.com/sso/login"
     }
   }
 }

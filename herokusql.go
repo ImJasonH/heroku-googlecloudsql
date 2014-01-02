@@ -8,6 +8,7 @@ import (
 	"appengine/urlfetch"
 
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/ioutil"
@@ -21,7 +22,7 @@ const (
 	authScope   = "https://www.googleapis.com/auth/sqlservice.admin"
 	insertURL   = "https://www.googleapis.com/sql/v1beta3/projects/" + projectName + "/instances"
 	bufSize     = 1 << 13 // 8KB
-	basePath    = "/heroku/resource"
+	basePath    = "/heroku/resources"
 )
 
 var instanceExists = errors.New("App already provisioned")
@@ -31,6 +32,9 @@ var tierMap = map[string]string{
 	"river":   "D4",
 	"deluge":  "D16",
 	"torrent": "D32",
+
+	// For testing
+	"test": "D0",
 }
 
 func init() {
@@ -38,17 +42,34 @@ func init() {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	if p, set := r.URL.User.Password(); !set {
-		http.Error(w, "Unauthenticated", http.StatusUnauthorized)
-		return
-	} else if p != password {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+	if sc := checkAuth(r); sc != http.StatusOK {
+		http.Error(w, "", sc)
 		return
 	}
 
-	if r.URL.Path == basePath { 
+	if r.URL.Path == basePath && r.Method == "POST" {
 		provision(w, r)
 	}
+}
+
+func checkAuth(r *http.Request) int {
+	s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+	if len(s) != 2 || s[0] != "Basic" {
+		return http.StatusUnauthorized
+	}
+	b, err := base64.StdEncoding.DecodeString(s[1])
+	if err != nil {
+		return http.StatusUnauthorized
+	}
+	pair := strings.SplitN(string(b), ":", 2)
+	if len(pair) != 2 {
+		return http.StatusUnauthorized
+	}
+
+	if pair[1] != password {
+		return http.StatusUnauthorized
+	}
+	return http.StatusOK
 }
 
 func provision(w http.ResponseWriter, r *http.Request) {
@@ -69,8 +90,7 @@ func provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiResp, err := apiInsert(c, instanceName, tier)
-	if err == instanceExists {
+	if _, err := apiInsert(c, instanceName, tier); err == instanceExists {
 		http.Error(w, "App is already provisioned", http.StatusConflict)
 		return
 	} else if err != nil {
@@ -82,7 +102,7 @@ func provision(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(herokuResponse{
 		ID: instanceName,
 		Config: herokuResponseConfig{
-			InstanceURL: apiResp.IPAddresses[0].IPAddress,
+			InstanceURL: "TEST",
 		},
 		Message: "Provision successful!",
 	})
@@ -108,7 +128,7 @@ func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, er
 			Tier:                      tier,
 			ActivationPolicy:          "ON_DEMAND",
 			AuthorizedGAEApplications: []string{appengine.AppID(c)},
-			PricingPlan:               "PACKAGE",
+			PricingPlan:               "PER_USE",
 			ReplicationType:           "ASYNCHRONOUS",
 		},
 	})
@@ -163,5 +183,5 @@ type herokuResponse struct {
 }
 
 type herokuResponseConfig struct {
-	InstanceURL string `json:"INSTANCE_URL"`
+	InstanceURL string `json:"GOOGLECLOUDSQL_URL"`
 }
