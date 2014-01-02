@@ -14,6 +14,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+
+	"github.com/gorilla/mux"
 )
 
 const (
@@ -22,7 +24,6 @@ const (
 	authScope   = "https://www.googleapis.com/auth/sqlservice.admin"
 	insertURL   = "https://www.googleapis.com/sql/v1beta3/projects/" + projectName + "/instances"
 	bufSize     = 1 << 13 // 8KB
-	basePath    = "/heroku/resources"
 )
 
 var instanceExists = errors.New("App already provisioned")
@@ -38,18 +39,11 @@ var tierMap = map[string]string{
 }
 
 func init() {
-	http.HandleFunc(basePath, handler)
-}
-
-func handler(w http.ResponseWriter, r *http.Request) {
-	if !checkAuth(r) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	if r.URL.Path == basePath && r.Method == "POST" {
-		provision(w, r)
-	}
+	r := mux.NewRouter()
+	r.HandleFunc("/heroku/resources", provision).Methods("POST")
+	r.HandleFunc("/heroku/resources/{id}", deprovision).Methods("DELETE")
+	r.HandleFunc("/heroku/resources/{id}", changePlan).Methods("POST")
+	http.Handle("/", r)
 }
 
 func checkAuth(r *http.Request) bool {
@@ -73,6 +67,11 @@ func checkAuth(r *http.Request) bool {
 }
 
 func provision(w http.ResponseWriter, r *http.Request) {
+	if !checkAuth(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	c := appengine.NewContext(r)
 	defer r.Body.Close()
 	var herReq herokuRequest
@@ -157,6 +156,22 @@ func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, er
 		return nil, err
 	}
 	return &apiResp, nil
+}
+
+func deprovision(w http.ResponseWriter, r *http.Request) {
+	if !checkAuth(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// TODO
+}
+
+func changePlan(w http.ResponseWriter, r *http.Request) {
+	if !checkAuth(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// TODO
 }
 
 type apiRequest struct {
