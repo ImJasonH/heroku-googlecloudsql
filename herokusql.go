@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	password    = "ka5E2i5W50WgYzg9yfc7"
+	password    = "f1937226ef79503baddc427190207e5d"
 	projectName = "herokusql"
 	authScope   = "https://www.googleapis.com/auth/sqlservice.admin"
 	insertURL   = "https://www.googleapis.com/sql/v1beta3/projects/" + projectName + "/instances"
