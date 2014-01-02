@@ -5,7 +5,6 @@ package herokusql
 
 import (
 	"appengine"
-	"appengine/datastore"
 	"appengine/urlfetch"
 
 	"bytes"
@@ -24,7 +23,7 @@ const (
 	bufSize     = 1 << 13 // 8KB
 )
 
-var appExists = errors.New("App already provisioned")
+var instanceExists = errors.New("App already provisioned")
 var tierMap = map[string]string{
 	"trickle": "D0",
 	"stream":  "D1",
@@ -35,11 +34,6 @@ var tierMap = map[string]string{
 
 func init() {
 	http.HandleFunc("/provision", provision)
-}
-
-type app struct {
-	InstanceName string
-	Plan         string
 }
 
 func provision(w http.ResponseWriter, r *http.Request) {
@@ -68,16 +62,11 @@ func provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := saveEntity(c, instanceName, herReq.Plan); err == appExists {
-		http.Error(w, "Already provisioned", http.StatusConflict)
+	apiResp, err := apiInsert(c, instanceName, tier)
+	if err == instanceExists {
+		http.Error(w, "App is already provisioned", http.StatusConflict)
 		return
 	} else if err != nil {
-		http.Error(w, "Error saving instance", http.StatusInternalServerError)
-		return
-	}
-
-	apiResp, err := apiInsert(c, instanceName, tier)
-	if err != nil {
 		http.Error(w, "Error creating instance", http.StatusInternalServerError)
 		return
 	}
@@ -90,28 +79,6 @@ func provision(w http.ResponseWriter, r *http.Request) {
 		},
 		Message: "Provision successful!",
 	})
-}
-
-func saveEntity(c appengine.Context, instanceName, plan string) error {
-	return datastore.RunInTransaction(c, func(tc appengine.Context) error {
-		var e app
-		k := datastore.NewKey(c, "app", instanceName, 0, nil)
-		if err := datastore.Get(c, k, e); err == nil {
-			return appExists
-		} else if err != datastore.ErrNoSuchEntity {
-			c.Errorf("get: %v", err)
-			return err
-		}
-		e = app{
-			InstanceName: instanceName,
-			Plan:         plan,
-		}
-		if _, err := datastore.Put(c, k, e); err != nil {
-			c.Errorf("put: %v", err)
-			return err
-		}
-		return nil
-	}, nil)
 }
 
 func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, error) {
@@ -140,6 +107,9 @@ func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, er
 	})
 	apiReq.Body = ioutil.NopCloser(buf)
 	apiHttpResp, err := urlfetch.Client(c).Do(apiReq)
+	if apiHttpResp.StatusCode == http.StatusConflict {
+		return nil, instanceExists
+	}
 	if err != nil {
 		c.Errorf("insert: %v", err)
 		return nil, err
