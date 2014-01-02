@@ -21,6 +21,7 @@ const (
 	authScope   = "https://www.googleapis.com/auth/sqlservice.admin"
 	insertURL   = "https://www.googleapis.com/sql/v1beta3/projects/" + projectName + "/instances"
 	bufSize     = 1 << 13 // 8KB
+	basePath    = "/heroku/resource"
 )
 
 var instanceExists = errors.New("App already provisioned")
@@ -33,10 +34,10 @@ var tierMap = map[string]string{
 }
 
 func init() {
-	http.HandleFunc("/provision", provision)
+	http.HandleFunc(basePath, handler)
 }
 
-func provision(w http.ResponseWriter, r *http.Request) {
+func handler(w http.ResponseWriter, r *http.Request) {
 	if p, set := r.URL.User.Password(); !set {
 		http.Error(w, "Unauthenticated", http.StatusUnauthorized)
 		return
@@ -45,6 +46,12 @@ func provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == basePath { 
+		provision(w, r)
+	}
+}
+
+func provision(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	defer r.Body.Close()
 	var herReq herokuRequest

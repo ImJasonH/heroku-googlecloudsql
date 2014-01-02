@@ -7,10 +7,10 @@
     "password": "ka5E2i5W50WgYzg9yfc7",
     "regions": ["us"],
     "production": {
-      "base_url": "https://herokusql.appspot.com"
+      "base_url": "https://herokusql.appspot.com/heroku/resource"
     },
     "test": {
-      "base_url": "https://test.herokusql.appspot.com"
+      "base_url": "https://test.herokusql.appspot.com/heroku/resource"
     }
   }
 }
