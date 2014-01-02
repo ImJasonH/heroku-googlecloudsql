@@ -1,0 +1,16 @@
+{
+  "id": "googlecloudsql",
+  "api": {
+    "config_vars": [
+      "INSTANCE_IP"
+    ],
+    "password": "ka5E2i5W50WgYzg9yfc7",
+    "regions": ["us"],
+    "production": {
+      "base_url": "https://herokusql.appspot.com"
+    },
+    "test": {
+      "base_url": "https://test.herokusql.appspot.com"
+    }
+  }
+}
