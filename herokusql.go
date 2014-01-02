@@ -42,8 +42,8 @@ func init() {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	if sc := checkAuth(r); sc != http.StatusOK {
-		http.Error(w, "", sc)
+	if !checkAuth(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -52,24 +52,24 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func checkAuth(r *http.Request) int {
+func checkAuth(r *http.Request) bool {
 	s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
 	if len(s) != 2 || s[0] != "Basic" {
-		return http.StatusUnauthorized
+		return false
 	}
 	b, err := base64.StdEncoding.DecodeString(s[1])
 	if err != nil {
-		return http.StatusUnauthorized
+		return false
 	}
 	pair := strings.SplitN(string(b), ":", 2)
 	if len(pair) != 2 {
-		return http.StatusUnauthorized
+		return false
 	}
 
 	if pair[1] != password {
-		return http.StatusUnauthorized
+		return false
 	}
-	return http.StatusOK
+	return true
 }
 
 func provision(w http.ResponseWriter, r *http.Request) {
@@ -90,19 +90,21 @@ func provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := apiInsert(c, instanceName, tier); err == instanceExists {
+	apiResp, err := apiInsert(c, instanceName, tier)
+	if err == instanceExists {
 		http.Error(w, "App is already provisioned", http.StatusConflict)
 		return
 	} else if err != nil {
 		http.Error(w, "Error creating instance", http.StatusInternalServerError)
 		return
 	}
+	c.Infof("resp: %+v", apiResp)
 
-	w.Header().Add("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(herokuResponse{
 		ID: instanceName,
 		Config: herokuResponseConfig{
-			InstanceURL: "TEST",
+			InstanceURL: apiResp.IPAddresses[0].IPAddress,
 		},
 		Message: "Provision successful!",
 	})
@@ -130,12 +132,19 @@ func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, er
 			AuthorizedGAEApplications: []string{appengine.AppID(c)},
 			PricingPlan:               "PER_USE",
 			ReplicationType:           "ASYNCHRONOUS",
+			IPConfiguration: apiRequestIPConfig {
+				Enabled: true,
+			},
 		},
 	})
 	apiReq.Body = ioutil.NopCloser(buf)
 	apiHttpResp, err := urlfetch.Client(c).Do(apiReq)
 	if apiHttpResp.StatusCode == http.StatusConflict {
 		return nil, instanceExists
+	} else if apiHttpResp.StatusCode != http.StatusOK {
+		slurp, _ := ioutil.ReadAll(apiHttpResp.Body)
+		c.Errorf("ERROR: %d, %s", apiHttpResp.StatusCode, slurp)
+		return nil, errors.New("bad status")
 	}
 	if err != nil {
 		c.Errorf("insert: %v", err)
@@ -157,11 +166,16 @@ type apiRequest struct {
 }
 
 type apiRequestSettings struct {
-	Tier                      string   `json:"tier"`
-	ActivationPolicy          string   `json:"activationPolicy"`
-	AuthorizedGAEApplications []string `json:"authorizedGaeApplications"`
-	PricingPlan               string   `json:"pricingPlan"`
-	ReplicationType           string   `json:"replicationType"`
+	Tier                      string             `json:"tier"`
+	ActivationPolicy          string             `json:"activationPolicy"`
+	AuthorizedGAEApplications []string           `json:"authorizedGaeApplications"`
+	PricingPlan               string             `json:"pricingPlan"`
+	ReplicationType           string             `json:"replicationType"`
+	IPConfiguration           apiRequestIPConfig `json:"ipConfiguration"`
+}
+
+type apiRequestIPConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 type apiResponse struct {
