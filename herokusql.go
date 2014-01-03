@@ -5,16 +5,15 @@ package herokusql
 
 import (
 	"appengine"
-	"appengine/urlfetch"
 
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"io/ioutil"
 	"net/http"
 	"strings"
+	"time"
 
+	"code.google.com/p/goauth2/appengine/serviceaccount"
+	sqlsvc "code.google.com/p/google-api-go-client/sqladmin/v1beta3"
 	"github.com/gorilla/mux"
 )
 
@@ -22,11 +21,10 @@ const (
 	password    = "f1937226ef79503baddc427190207e5d"
 	projectName = "herokusql"
 	authScope   = "https://www.googleapis.com/auth/sqlservice.admin"
-	insertURL   = "https://www.googleapis.com/sql/v1beta3/projects/" + projectName + "/instances"
-	bufSize     = 1 << 13 // 8KB
+	retryDelay  = time.Duration(time.Second * 2)
+	retryCount  = 5
 )
 
-var instanceExists = errors.New("App already provisioned")
 var tierMap = map[string]string{
 	"trickle": "D0",
 	"stream":  "D1",
@@ -37,9 +35,9 @@ var tierMap = map[string]string{
 	// For testing
 	"test": "D0",
 }
+var r = mux.NewRouter()
 
 func init() {
-	r := mux.NewRouter()
 	r.HandleFunc("/heroku/resources", provision).Methods("POST")
 	r.HandleFunc("/heroku/resources/{id}", deprovision).Methods("DELETE")
 	r.HandleFunc("/heroku/resources/{id}", changePlan).Methods("POST")
@@ -66,6 +64,20 @@ func checkAuth(r *http.Request) bool {
 	return true
 }
 
+func service(c appengine.Context) (*sqlsvc.Service, error) {
+	client, err := serviceaccount.NewClient(c, authScope)
+	if err != nil {
+		c.Errorf("svc acct: %v", err)
+		return nil, err
+	}
+	sql, err := sqlsvc.New(client)
+	if err != nil {
+		c.Errorf("new svc: %v", err)
+		return nil, err
+	}
+	return sql, nil
+}
+
 func provision(w http.ResponseWriter, r *http.Request) {
 	if !checkAuth(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -73,14 +85,12 @@ func provision(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c := appengine.NewContext(r)
-	defer r.Body.Close()
-	var herReq herokuRequest
-	if err := json.NewDecoder(r.Body).Decode(&herReq); err != nil {
-		c.Errorf("decode: %v", err)
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+
+	herReq, err := request(c, r)
+	if err != nil {
+		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
-
 	instanceName := herReq.HerokuID[:strings.Index(herReq.HerokuID, "@")]
 	tier, ok := tierMap[herReq.Plan]
 	if !ok {
@@ -89,12 +99,34 @@ func provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiResp, err := apiInsert(c, instanceName, tier)
-	if err == instanceExists {
-		http.Error(w, "App is already provisioned", http.StatusConflict)
+	sql, err := service(c)
+	if err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
 		return
-	} else if err != nil {
-		http.Error(w, "Error creating instance", http.StatusInternalServerError)
+	}
+	if _, err := sql.Instances.Insert(projectName, &sqlsvc.DatabaseInstance{
+		Project:  projectName,
+		Instance: instanceName,
+		Settings: &sqlsvc.Settings{
+			ActivationPolicy:          "ON_DEMAND",
+			AuthorizedGaeApplications: []string{appengine.AppID(c)},
+			IpConfiguration: &sqlsvc.IpConfiguration{
+				Enabled: true,
+			},
+			PricingPlan:     "PER_USE",
+			ReplicationType: "ASYNCHRONOUS",
+			Tier:            tier,
+		},
+	}).Do(); err != nil {
+		// TODO: Handle conflict
+		c.Errorf("insert: %v", err)
+		http.Error(w, "Error", http.StatusBadRequest)
+		return
+	}
+
+	ip := getInstanceIP(c, sql, instanceName)
+	if ip == "" {
+		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 
@@ -102,60 +134,10 @@ func provision(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(herokuResponse{
 		ID: instanceName,
 		Config: herokuResponseConfig{
-			InstanceURL: apiResp.IPAddresses[0].IPAddress,
+			InstanceURL: ip,
 		},
 		Message: "Provision successful!",
 	})
-}
-
-func apiInsert(c appengine.Context, instanceName, tier string) (*apiResponse, error) {
-	apiReq, err := http.NewRequest("POST", insertURL, nil)
-	if err != nil {
-		c.Errorf("new request: %v", err)
-		return nil, err
-	}
-	tok, _, err := appengine.AccessToken(c, authScope)
-	if err != nil {
-		c.Errorf("accesstoken: %v", err)
-		return nil, err
-	}
-	apiReq.Header.Set("Authorization", "Bearer "+tok)
-	apiReq.Header.Set("Content-Type", "application/json")
-	buf := bytes.NewBuffer(make([]byte, 0, bufSize))
-	json.NewEncoder(buf).Encode(apiRequest{
-		Instance: instanceName,
-		Project:  projectName,
-		Settings: apiRequestSettings{
-			Tier:                      tier,
-			ActivationPolicy:          "ON_DEMAND",
-			AuthorizedGAEApplications: []string{appengine.AppID(c)},
-			PricingPlan:               "PER_USE",
-			ReplicationType:           "ASYNCHRONOUS",
-			IPConfiguration: apiRequestIPConfig{
-				Enabled: true,
-			},
-		},
-	})
-	apiReq.Body = ioutil.NopCloser(buf)
-	apiHttpResp, err := urlfetch.Client(c).Do(apiReq)
-	if apiHttpResp.StatusCode == http.StatusConflict {
-		return nil, instanceExists
-	} else if apiHttpResp.StatusCode != http.StatusOK {
-		slurp, _ := ioutil.ReadAll(apiHttpResp.Body)
-		c.Errorf("API request failed:\n %d, %s", apiHttpResp.StatusCode, slurp)
-		return nil, errors.New("insert failed")
-	}
-	if err != nil {
-		c.Errorf("insert: %v", err)
-		return nil, err
-	}
-	var apiResp apiResponse
-	defer apiHttpResp.Body.Close()
-	if err := json.NewDecoder(apiHttpResp.Body).Decode(&apiResp); err != nil {
-		c.Errorf("decode: %v", err)
-		return nil, err
-	}
-	return &apiResp, nil
 }
 
 func deprovision(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +145,17 @@ func deprovision(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// TODO
+
+	c := appengine.NewContext(r)
+	sql, err := service(c)
+	if err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+	if _, err := sql.Instances.Delete(projectName, mux.Vars(r)["id"]).Do(); err != nil {
+		c.Errorf("delete: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
+	}
 }
 
 func changePlan(w http.ResponseWriter, r *http.Request) {
@@ -171,38 +163,89 @@ func changePlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	// TODO
+
+	c := appengine.NewContext(r)
+	herReq, err := request(c, r)
+	if err != nil {
+		http.Error(w, "", http.StatusBadRequest)
+		return
+	}
+	tier, ok := tierMap[herReq.Plan]
+	if !ok {
+		c.Errorf("tier: %s", herReq.Plan)
+		http.Error(w, "Invalid plan "+herReq.Plan, http.StatusBadRequest)
+		return
+	}
+
+	sql, err := service(c)
+	if err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+	instanceName := mux.Vars(r)["id"]
+	if _, err := sql.Instances.Update(projectName, instanceName, &sqlsvc.DatabaseInstance{
+		Project:  projectName,
+		Instance: instanceName,
+		Settings: &sqlsvc.Settings{
+			Tier: tier,
+		},
+	}).Do(); err != nil {
+		c.Errorf("update: %v", err)
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+
+	ip := getInstanceIP(c, sql, instanceName)
+	if ip == "" {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(herokuResponse{
+		ID: instanceName,
+		Config: herokuResponseConfig{
+			InstanceURL: ip,
+		},
+		Message: "Plan change successful!",
+	})
 }
 
-type apiRequest struct {
-	Instance string             `json:"instance"`
-	Project  string             `json:"project"`
-	Settings apiRequestSettings `json:"settings"`
-}
-
-type apiRequestSettings struct {
-	Tier                      string             `json:"tier"`
-	ActivationPolicy          string             `json:"activationPolicy"`
-	AuthorizedGAEApplications []string           `json:"authorizedGaeApplications"`
-	PricingPlan               string             `json:"pricingPlan"`
-	ReplicationType           string             `json:"replicationType"`
-	IPConfiguration           apiRequestIPConfig `json:"ipConfiguration"`
-}
-
-type apiRequestIPConfig struct {
-	Enabled bool `json:"enabled"`
-}
-
-type apiResponse struct {
-	IPAddresses []struct {
-		IPAddress string `json:"ipAddress"`
-	} `json:"ipAddresses"`
+func getInstanceIP(c appengine.Context, sql *sqlsvc.Service, instanceName string) string {
+	for i := 0; i < retryCount; i++ {
+		inst, err := sql.Instances.Get(projectName, instanceName).Do()
+		if err != nil {
+			c.Errorf("get: %v", err)
+			return ""
+		}
+		if inst.State != "RUNNABLE" {
+			time.Sleep(retryDelay)
+			continue
+		}
+		if inst.IpAddresses == nil {
+			c.Errorf("runnable w/o IP")
+			return ""
+		}
+		return inst.IpAddresses[0].IpAddress
+	}
+	c.Errorf("timeout")
+	return ""
 }
 
 type herokuRequest struct {
 	HerokuID    string `json:"heroku_id"`
 	Plan        string `json:"plan"`
 	CallbackURL string `json:"callback_url"`
+}
+
+func request(c appengine.Context, r *http.Request) (*herokuRequest, error) {
+	defer r.Body.Close()
+	var herReq herokuRequest
+	if err := json.NewDecoder(r.Body).Decode(&herReq); err != nil {
+		c.Errorf("decode: %v", err)
+		return nil, err
+	}
+	return &herReq, nil
 }
 
 type herokuResponse struct {
