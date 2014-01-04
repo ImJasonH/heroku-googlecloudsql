@@ -120,7 +120,7 @@ func provision(w http.ResponseWriter, r *http.Request) {
 	}).Do(); err != nil {
 		// TODO: Handle conflict
 		c.Errorf("insert: %v", err)
-		http.Error(w, "Error", http.StatusBadRequest)
+		http.Error(w, "Error", http.StatusInternalServerError)
 		return
 	}
 
