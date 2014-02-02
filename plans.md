@@ -1,12 +1,14 @@
 Plans
 -----
 
-GSQL Tier | GSQL $/day | GSQL $/month | Heroku $/month
---- | --- | --- | ---
-D0 | .36 | 10.8 | 15.43
-D1 | 1.46 | 43.8 | 65.58
-D2 | 2.93 | 87.9 | 125.58
-D4 | 5.86 | 175.8 | 251.15
-D8 | 11.71 | 351.3 |  501.86
-D16 | 23.42 | 702.6 | 1003.72
-D32 | 46.84 | 1405.2 | 2007.43
+Name | GSQL Tier | $/month
+--- | --- | ---
+Small | D0 | $16
+Medium | D1 | $64
+Large | D2 | $128
+Huge | D4 | $256
+Massive | D8 | $500
+Humongous | D16 | $1000
+Gigantic | D32 | $2000
+
+See https://developers.google.com/cloud-sql/pricing#packages
