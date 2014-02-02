@@ -129,7 +129,7 @@ func provision(w http.ResponseWriter, r *http.Request) {
 			IpConfiguration: &sqlsvc.IpConfiguration{
 				Enabled: true,
 			},
-			PricingPlan:     "PER_USE",
+			PricingPlan:     "PACKAGE",
 			ReplicationType: "ASYNCHRONOUS",
 			Tier:            tier,
 		},
