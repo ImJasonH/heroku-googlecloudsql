@@ -4,6 +4,7 @@ package herokusql
 
 import (
 	"appengine"
+	"appengine/datastore"
 
 	"encoding/base64"
 	"encoding/json"
@@ -17,13 +18,13 @@ import (
 )
 
 const (
-	// TODO: Store password in datastore, look it up and cache it the first time it's needed by this GAE instance
-	password    = "f1937226ef79503baddc427190207e5d"
 	projectName = "herokusql"
 	authScope   = "https://www.googleapis.com/auth/sqlservice.admin"
 	retryDelay  = time.Duration(time.Second * 2)
 	retryCount  = 5
 )
+
+var password = ""
 
 var tierMap = map[string]string{
 	"trickle": "D0",
@@ -44,6 +45,20 @@ func init() {
 	http.Handle("/", r)
 }
 
+func getPassword(c appengine.Context) string {
+	if password == "" {
+		c.Infof("Fetching password")
+		k := datastore.NewKey(c, "password", "password", 0, nil)
+		e := new(struct{ Password string })
+		if err := datastore.Get(c, k, e); err != nil {
+			c.Errorf("Getting password", err)
+			return ""
+		}
+		password = e.Password
+	}
+	return password
+}
+
 func checkAuth(r *http.Request) bool {
 	s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
 	if len(s) != 2 || s[0] != "Basic" {
@@ -54,11 +69,12 @@ func checkAuth(r *http.Request) bool {
 		return false
 	}
 	pair := strings.SplitN(string(b), ":", 2)
-	if len(pair) != 2 {
+	if len(pair) != 2 || pair[1] == "" {
 		return false
 	}
 
-	if pair[1] != password {
+	c := appengine.NewContext(r)
+	if pair[1] != getPassword(c) {
 		return false
 	}
 	return true
