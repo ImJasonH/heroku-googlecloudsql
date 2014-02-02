@@ -1,5 +1,4 @@
 // TODO: Support setting regions
-// TODO: Implement deprovision and plan change
 
 package herokusql
 
@@ -18,6 +17,7 @@ import (
 )
 
 const (
+	// TODO: Store password in datastore, look it up and cache it the first time it's needed by this GAE instance
 	password    = "f1937226ef79503baddc427190207e5d"
 	projectName = "herokusql"
 	authScope   = "https://www.googleapis.com/auth/sqlservice.admin"
@@ -35,9 +35,9 @@ var tierMap = map[string]string{
 	// For testing
 	"test": "D0",
 }
-var r = mux.NewRouter()
 
 func init() {
+	r := mux.NewRouter()
 	r.HandleFunc("/heroku/resources", provision).Methods("POST")
 	r.HandleFunc("/heroku/resources/{id}", deprovision).Methods("DELETE")
 	r.HandleFunc("/heroku/resources/{id}", changePlan).Methods("POST")
